@@ -1,0 +1,4 @@
+generator/fonts_diff
+
+# FVM Version Cache
+.fvm/
