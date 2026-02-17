@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -214,11 +214,10 @@ Future<ByteData?> getFontByte(GoogleFontsDescriptor descriptor) async {
 
   try {
     Future<ByteData?>? byteData;
-
-    final assetManifestJson = await assetManifest.json();
-    final assetPath = _findFamilyWithVariantAssetPath(
+    assetManifest ??= await AssetManifest.loadFromAssetBundle(rootBundle);
+    final String? assetPath = findFamilyWithVariantAssetPath(
       descriptor.familyWithVariant,
-      assetManifestJson,
+      assetManifest?.listAssets(),
     );
     if (assetPath != null) {
       byteData = rootBundle.load(assetPath);
