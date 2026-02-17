@@ -1,26 +1,17 @@
-// Copyright 2019 The Flutter team. All rights reserved.
+// Copyright 2013 The Flutter Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-// TODO(andrewkolos): The flutter framework wishes to add a new class named
-// `AssetManifest` to its API (see https://github.com/flutter/flutter/pull/119277).
-// However, doing so would break integration tests that utilize google_fonts due
-// to name collision with the `AssetManifest` class that this package already
-// defines (see https://github.com/flutter/flutter/pull/119273).
-// Once the AssetManifest API is added to flutter, update this package to use it
-// instead of the AssetManifest class this package defines and remove this `hide`
-// and the ignore annotation.
-// ignore: undefined_hidden_name
-import 'package:flutter/services.dart' hide AssetManifest;
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import '../google_fonts.dart';
-import 'asset_manifest.dart';
+import 'custom_text_style.dart';
 import 'file_io.dart' // Stubbed implementation by default.
-    // Concrete implementation if File IO is available.
+// Concrete implementation if File IO is available.
     if (dart.library.io) 'file_io_desktop_and_mobile.dart' as file_io;
 import 'google_fonts_descriptor.dart';
 import 'google_fonts_family_with_variant.dart';
@@ -29,8 +20,9 @@ import 'google_fonts_variant.dart';
 /// Set of fonts that are loading or loaded.
 ///
 /// Used to determine whether to load a font or not.
-final Set<String> _loadedFonts = {};
+final Set<String> _loadedFonts = <String>{};
 
+/// Clears any previously loaded fonts.
 @visibleForTesting
 void clearCache() => _loadedFonts.clear();
 
@@ -38,13 +30,15 @@ void clearCache() => _loadedFonts.clear();
 ///
 /// When a font is loading, a future is added to this set. When it is loaded in
 /// the [FontLoader], that future is removed from this set.
-final Set<Future<void>> pendingFontFutures = {};
+final Set<Future<void>> pendingFontFutures = <Future<void>>{};
 
+/// The client used to fetch fonts.
 @visibleForTesting
 http.Client httpClient = http.Client();
 
+/// The asset manifest to use for loading pre-bundled fonts.
 @visibleForTesting
-AssetManifest assetManifest = AssetManifest();
+AssetManifest? assetManifest;
 
 /// Creates a [TextStyle] that either uses the [fontFamily] for the requested
 /// GoogleFont, or falls back to the pre-bundled [fontFamily].
@@ -100,7 +94,7 @@ CustomTextStyle googleFontsTextStyle({
     fontWeight: textStyle.fontWeight ?? FontWeight.w400,
     fontStyle: textStyle.fontStyle ?? FontStyle.normal,
   );
-  final matchedVariant = _closestMatch(variant, fonts.keys);
+  final GoogleFontsVariant matchedVariant = _closestMatch(variant, fonts.keys);
   final familyWithVariant = GoogleFontsFamilyWithVariant(
     family: fontFamily,
     googleFontsVariant: matchedVariant,
@@ -111,14 +105,13 @@ CustomTextStyle googleFontsTextStyle({
     file: fonts[matchedVariant]!,
   );
 
-  final loadingFuture = loadFontIfNecessary(descriptor);
+  final Future<void> loadingFuture = loadFontIfNecessary(descriptor);
   pendingFontFutures.add(loadingFuture);
   loadingFuture.then((_) => pendingFontFutures.remove(loadingFuture));
 
   return textStyle.copyWithCustom(
     fontFamily: familyWithVariant.toString(),
-    fontFamilyFallback: [fontFamily],
-    descriptor: descriptor,
+    fontFamilyFallback: <String>[fontFamily],
   );
 }
 
@@ -134,8 +127,8 @@ CustomTextStyle googleFontsTextStyle({
 /// completes once the font is loaded into the [FontLoader].
 Future<void> loadFontIfNecessary(GoogleFontsDescriptor descriptor) async {
   final familyWithVariantString = descriptor.familyWithVariant.toString();
-  final fontName = descriptor.familyWithVariant.toApiFilenamePrefix();
-  final fileHash = descriptor.file.expectedFileHash;
+  final String fontName = descriptor.familyWithVariant.toApiFilenamePrefix();
+  final String fileHash = descriptor.file.expectedFileHash;
   // If this font has already already loaded or is loading, then there is no
   // need to attempt to load it again, unless the attempted load results in an
   // error.
@@ -149,15 +142,14 @@ Future<void> loadFontIfNecessary(GoogleFontsDescriptor descriptor) async {
     Future<ByteData?>? byteData;
 
     // Check if this font can be loaded by the pre-bundled assets.
-    final assetManifestJson = await assetManifest.json();
-    final assetPath = _findFamilyWithVariantAssetPath(
+    assetManifest ??= await AssetManifest.loadFromAssetBundle(rootBundle);
+    final String? assetPath = findFamilyWithVariantAssetPath(
       descriptor.familyWithVariant,
-      assetManifestJson,
+      assetManifest?.listAssets(),
     );
     if (assetPath != null) {
       byteData = rootBundle.load(assetPath);
     }
-
     if (await byteData != null) {
       return loadFontByteData(familyWithVariantString, byteData);
     }
@@ -190,19 +182,25 @@ Future<void> loadFontIfNecessary(GoogleFontsDescriptor descriptor) async {
     }
   } catch (e) {
     _loadedFonts.remove(familyWithVariantString);
-    print('Error: google_fonts was unable to load font $fontName because the '
-        'following exception occurred:\n$e');
+    debugPrint(
+      'Error: google_fonts was unable to load font $fontName because the '
+      'following exception occurred:\n$e',
+    );
     if (file_io.isTest) {
-      print('\nThere is likely something wrong with your test. Please see '
-          'https://github.com/material-foundation/flutter-packages/blob/main/packages/google_fonts/example/test '
-          'for examples of how to test with google_fonts.');
+      debugPrint(
+        '\nThere is likely something wrong with your test. Please see '
+        'https://github.com/flutter/packages/blob/main/packages/google_fonts/example/test '
+        'for examples of how to test with google_fonts.',
+      );
     } else if (file_io.isMacOS || file_io.isAndroid) {
-      print(
+      debugPrint(
         '\nSee https://docs.flutter.dev/development/data-and-backend/networking#platform-notes.',
       );
     }
-    print('If troubleshooting doesn\'t solve the problem, please file an issue '
-        'at https://github.com/material-foundation/flutter-packages/issues/new/choose.\n');
+    debugPrint(
+      "If troubleshooting doesn't solve the problem, please file an issue "
+      'at https://github.com/flutter/flutter/issues/new/choose.\n',
+    );
     rethrow;
   }
 }
@@ -261,12 +259,16 @@ Future<void> loadFontByteData(
   String familyWithVariantString,
   Future<ByteData?>? byteData,
 ) async {
-  if (byteData == null) return;
-  final fontData = await byteData;
-  if (fontData == null) return;
+  if (byteData == null) {
+    return;
+  }
+  final ByteData? fontData = await byteData;
+  if (fontData == null) {
+    return;
+  }
 
   final fontLoader = FontLoader(familyWithVariantString);
-  fontLoader.addFont(Future.value(fontData));
+  fontLoader.addFont(Future<ByteData>.value(fontData));
   await fontLoader.load();
 }
 
@@ -283,7 +285,7 @@ GoogleFontsVariant _closestMatch(
   int? bestScore;
   late GoogleFontsVariant bestMatch;
   for (final variantToCompare in variantsToCompare) {
-    final score = _computeMatch(sourceVariant, variantToCompare);
+    final int score = _computeMatch(sourceVariant, variantToCompare);
     if (bestScore == null || score < bestScore) {
       bestScore = score;
       bestMatch = variantToCompare;
@@ -300,7 +302,7 @@ Future<ByteData> _httpFetchFontAndSaveToDevice(
   String fontName,
   GoogleFontsFile file,
 ) async {
-  final uri = Uri.tryParse(file.url);
+  final Uri? uri = Uri.tryParse(file.url);
   if (uri == null) {
     throw Exception('Invalid fontUrl: ${file.url}');
   }
@@ -318,11 +320,13 @@ Future<ByteData> _httpFetchFontAndSaveToDevice(
       );
     }
 
-    _unawaited(file_io.saveFontToDeviceFileSystem(
-      name: fontName,
-      fileHash: file.expectedFileHash,
-      bytes: response.bodyBytes,
-    ));
+    _unawaited(
+      file_io.saveFontToDeviceFileSystem(
+        name: fontName,
+        fileHash: file.expectedFileHash,
+        bytes: response.bodyBytes,
+      ),
+    );
 
     return ByteData.view(response.bodyBytes.buffer);
   } else {
@@ -338,7 +342,7 @@ int _computeMatch(GoogleFontsVariant a, GoogleFontsVariant b) {
   if (a == b) {
     return 0;
   }
-  int score = (a.fontWeight.index - b.fontWeight.index).abs();
+  int score = (a.fontWeight.value - b.fontWeight.value).abs() ~/ 100;
   if (a.fontStyle != b.fontStyle) {
     score += 2;
   }
@@ -347,18 +351,27 @@ int _computeMatch(GoogleFontsVariant a, GoogleFontsVariant b) {
 
 /// Looks for a matching [familyWithVariant] font, provided the asset manifest.
 /// Returns the path of the font asset if found, otherwise an empty string.
-String? _findFamilyWithVariantAssetPath(
+@visibleForTesting
+String? findFamilyWithVariantAssetPath(
   GoogleFontsFamilyWithVariant familyWithVariant,
-  Map<String, List<String>>? manifestJson,
-) {
-  if (manifestJson == null) return null;
+  List<String>? manifestValues, {
+  bool isWeb = kIsWeb,
+}) {
+  if (manifestValues == null) {
+    return null;
+  }
 
-  final apiFilenamePrefix = familyWithVariant.toApiFilenamePrefix();
+  final String apiFilenamePrefix = familyWithVariant.toApiFilenamePrefix();
+  final fileTypes = isWeb ? ['.woff2', '.woff', '.ttf', '.otf'] : ['.ttf', '.otf'];
 
-  for (final assetList in manifestJson.values) {
-    for (final String asset in assetList) {
-      for (final matchingSuffix in ['.ttf', '.otf'].where(asset.endsWith)) {
-        final assetWithoutExtension = asset.substring(0, asset.length - matchingSuffix.length);
+  // Iterate by file type priority, ensuring preferred formats are selected.
+  for (final fileType in fileTypes) {
+    for (final String asset in manifestValues) {
+      if (asset.endsWith(fileType)) {
+        final String assetWithoutExtension = asset.substring(
+          0,
+          asset.length - fileType.length,
+        );
         if (assetWithoutExtension.endsWith(apiFilenamePrefix)) {
           return asset;
         }
@@ -370,7 +383,7 @@ String? _findFamilyWithVariantAssetPath(
 }
 
 bool _isFileSecure(GoogleFontsFile file, Uint8List bytes) {
-  final actualFileLength = bytes.length;
+  final int actualFileLength = bytes.length;
   final actualFileHash = sha256.convert(bytes).toString();
   return file.expectedLength == actualFileLength && file.expectedFileHash == actualFileHash;
 }
