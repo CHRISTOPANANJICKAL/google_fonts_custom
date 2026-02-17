@@ -112,6 +112,7 @@ CustomTextStyle googleFontsTextStyle({
   return textStyle.copyWithCustom(
     fontFamily: familyWithVariant.toString(),
     fontFamilyFallback: <String>[fontFamily],
+    descriptor: descriptor,
   );
 }
 
